@@ -1,69 +1,76 @@
-require 'csv'
-genres = %w(中華 イタリアン 和食)
-categories = %w(魚 肉 野菜)
-payments = %w(クレジット 現金 請求書)
-prcies = %w(500 1000 1500 2000)
-cities = []
+require "csv"
 
-class MasterDate
-  def self.user_setup
-    User.create(name: Faker::Name.unique.name)
-  end
+ADDRESSES = CSV.foreach(
+    "./lib/master_data/13tokyo.csv",
+    encoding: "Shift_JIS:UTF-8",
+    headers: true
+  )
+  .entries
+  .reject{|address| address["字丁目"].blank? }
 
-  def self.genre_setup(genres)
-    genres.each { |genre| Genre.create(name: genre) }
-  end
+def random_address
+  address = ADDRESSES.delete_at(rand(0..ADDRESSES.size)) # 重複しないように一度使ったら消す
+  FactoryBot.build(
+    :address,
+    prefecture: address["都道府県"],
+    city: address["市区町村"],
+    line_1: address["町域"],
+    line_2: address["字丁目"],
+    postalcode: address["郵便番号"]
+  )
+end
 
-  def random_data(obj)
-    eval("#{obj}.offset((rand(#{obj}.count))).first")
-  end
-
-  def self.category_setup(categories)
-
-  end
-
-  def maluti_create(type, times)
-
+def setup_shop
+  shop = FactoryBot.create(:shop, name: Faker::Restaurant.unique.name)
+  rand(1..3).times{ shop.addresses << random_address }
+  rand(1..10).times do
+    FactoryBot.create(
+      "#{["japanese","chinese","italian"].sample}_food",
+      shop: shop,
+      name: "#{Faker::Creature::Animal.name}の#{Faker::Restaurant.type}",
+      price: 300.step(by:100, to:1900).to_a.sample + 90
+    )
   end
 end
 
-data_obj = MasterDate.new
-
-if File.exist?("./lib/master_data/13tokyo.csv")
-  CSV.foreach('./lib/master_data/13tokyo.csv', encoding: 'Shift_JIS:UTF-8').each do |row|
-    unless cities.include?(row[9])
-      MasterDate.user_setup if User.count < 10
-      cities << row[9]
-      city = City.create(name: row[9])
+def setup_customer
+  customer = FactoryBot.create(:customer, name: Faker::Name.unique.name)
+  rand(1..3).times{ customer.addresses << random_address }
+  rand(1..10).times do
+    FactoryBot.create(
+      :order,
+      customer: customer,
+      address: customer.addresses.sample
+    )
+  end
+  customer.orders.each do |order|
+    shop = Shop.all.sample
+    rand(1..10).times do
+      FactoryBot.create(
+        :order_food,
+        order: order,
+        food: shop.foods.sample
+      )
     end
   end
 end
 
 100.times do
-  rand_num = rand(3)
-  city =  City.offset((rand(City.count))).first
-  city =  data_obj.random_data("City")
-  # shop = Shop.create(name: "#{Faker::Food.ingredient} shop", city_id: city.id)
-  genre = Genre.create(name: genres[rand_num])
-  # genreのインスタンスとしてshopsがあるので最終的にはgenreを保存する必要がある
-  # http://www.rokurofire.info/2014/02/26/rails_tablerelationship/ <==いいリンク
-  # city_idがないとエラーになる
-  genre.shops.build(name: "#{Faker::Food.ingredient} shop", city_id: city.id)
-  genre.save
+  begin
+    setup_shop
+    setup_customer
+  rescue => e
+  end
+end
 
-  # TODO: カテゴリ作成
-  shop =  data_obj.random_data("Shop")
-  category = Category.create(name: categories[rand_num])
-  category.foods.build(shop_id: shop.id, name: Faker::Food.dish, price: prcies.sample.to_i).save
+# 要件で求める期待する出力結果を確実にするように
+addr1, addr2 = Address.all.sort{|a, b| b.orders.size <=> a.orders.size }.first(2)
+if addr1.orders.size == addr2.orders.size
+  addr2.orders.last.destroy
+end
 
-  user = data_obj.random_data("User")
-  food = category.foods.first
-  food.orders.build(user_id: user.id)
-  food.save
-  order = food.orders.first
-  # binding.pry
-  order.build_order_information(payment: payments[rand_num])
-
-  order.save
-
+Customer.module_eval { def foods_price_sum; orders.map(&:foods).flatten.sum(&:price); end }
+c1, c2 = Customer.all.sort{|a, b| b.foods_price_sum <=> a.foods_price_sum }.first(2)
+if c1.foods_price_sum == c2.foods_price_sum
+  c2.orders.last.destroy
 end
